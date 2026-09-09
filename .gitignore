@@ -1,0 +1,12 @@
+.gradle/
+.idea/
+.cpm-cache/
+app/.cxx/
+app/build/
+build/
+dist/
+external/aap-core/local.properties
+external/usf2plugin/.stamp-app
+external/usf2plugin/modules/juce
+local.properties
+*.iml

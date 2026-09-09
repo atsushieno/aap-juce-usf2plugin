@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<devices>
+    <device name="USF2Plugin" manufacturer="androidaudioplugin.org" product="USF2Plugin">
+        <port name="port1" />
+    </device>
+</devices>
+

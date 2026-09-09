@@ -1,0 +1,164 @@
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,2 @@
++.stamp-app
++modules/juce
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index a488bb3..3690f3e 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -19,10 +19,45 @@ endif()
+ 
+-include(cmake/CPM.cmake)
+-
+-CPMAddPackage(
+-    NAME JUCE
+-    GITHUB_REPOSITORY juce-framework/JUCE
+-    GIT_TAG 9.0.0)
++if(ANDROID)
++    include(${AAP_JUCE_DIR}/cmake/CPM.cmake)
++    # AAP hosts the editor in another Android component, so JUCE must be patched
++    # before it is configured. A distinct cache key prevents an unpatched JUCE 9
++    # checkout from being reused by CPM.
++    CPMAddPackage(
++        NAME JUCE
++        GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
++        GIT_TAG 9.0.0
++        CUSTOM_CACHE_KEY aap-usf2-9.0.0
++        PATCH_COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/support-plugin-ui.patch
++        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/export-jni-symbols.patch
++        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/disable-detach-current-thread.patch
++        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/juce-component-peer-view-touch.patch
++        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/embedded-peer-window-guard.patch
++        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/9.0.0/popup-menu-android.patch
++        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/JUCE-support-Android-CMake.patch)
++
++    file(READ "${JUCE_SOURCE_DIR}/modules/juce_gui_basics/native/java/app/com/rmsl/juce/ComponentPeerView.java"
++         _AAP_JUCE_PATCH_PROBE)
++    if(NOT _AAP_JUCE_PATCH_PROBE MATCHES "getLocationOnScreen")
++        message(FATAL_ERROR
++            "JUCE source cache is stale or the AAP patches were not applied: ${JUCE_SOURCE_DIR}")
++    endif()
++
++    # Gradle compiles JUCE's Android Java sources through this stable path.
++    file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/modules")
++    file(REMOVE "${CMAKE_CURRENT_SOURCE_DIR}/modules/juce")
++    file(CREATE_LINK "${JUCE_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/modules/juce"
++         SYMBOLIC RESULT _AAP_JUCE_LINK_RESULT)
++    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/modules/juce/CMakeLists.txt")
++        message(FATAL_ERROR
++            "Could not link modules/juce to JUCE (${_AAP_JUCE_LINK_RESULT})")
++    endif()
++else()
++    include(cmake/CPM.cmake)
++    CPMAddPackage(
++        NAME JUCE
++        GITHUB_REPOSITORY juce-framework/JUCE
++        GIT_TAG 9.0.0)
++endif()
+ 
+ # Header only, so there is nothing to build: TSF_IMPLEMENTATION is defined in
+ # SoundFontEngine.cpp. The pinned commit is the fork's split-render branch, which adds
+@@ -47,6 +82,10 @@ CPMAddPackage(
+ 
+ option(USF2PLUGIN_BUILD_CLAP "Build the CLAP target (fetches clap-juce-extensions)" ON)
+ 
++if(ANDROID)
++    set(USF2PLUGIN_BUILD_CLAP OFF CACHE BOOL "Build the CLAP target" FORCE)
++endif()
++
+ if(USF2PLUGIN_BUILD_CLAP)
+     # Brings its own clap/clap-helpers submodules along.
+     CPMAddPackage(
+@@ -66,6 +105,14 @@ target_include_directories(tinysoundfont SYSTEM INTERFACE ${TinySoundFont_SOURCE
+ 
+ # The identity is the one the DPF version published, so hosts see this as the same
+ # plugin rather than a new one: AU 'USF2'/'AENO', the same CLAP id and LV2 URI.
++if(ANDROID)
++    set(USF2PLUGIN_FORMATS Standalone)
++    set(USF2PLUGIN_COPY_AFTER_BUILD FALSE)
++else()
++    set(USF2PLUGIN_FORMATS AU VST3 LV2 Standalone)
++    set(USF2PLUGIN_COPY_AFTER_BUILD TRUE)
++endif()
++
+ juce_add_plugin(USF2Plugin
+     PRODUCT_NAME "USF2Plugin"
+     COMPANY_NAME "atsushieno"
+@@ -73,13 +120,13 @@ juce_add_plugin(USF2Plugin
+     BUNDLE_ID "dev.atsushieno.usf2plugin"
+     PLUGIN_MANUFACTURER_CODE AENO
+     PLUGIN_CODE USF2
+-    FORMATS AU VST3 LV2 Standalone
++    FORMATS ${USF2PLUGIN_FORMATS}
+     IS_SYNTH TRUE
+     NEEDS_MIDI_INPUT TRUE
+     NEEDS_MIDI_OUTPUT FALSE
+     IS_MIDI_EFFECT FALSE
+     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+-    COPY_PLUGIN_AFTER_BUILD TRUE
++    COPY_PLUGIN_AFTER_BUILD ${USF2PLUGIN_COPY_AFTER_BUILD}
+     LV2URI "https://github.com/atsushieno/usf2plugin"
+     VST3_CATEGORIES "Instrument" "Synth"
+     AU_MAIN_TYPE "kAudioUnitType_MusicDevice")
+@@ -109,6 +156,25 @@ target_compile_definitions(USF2Plugin PUBLIC
+     JUCE_VST3_CAN_REPLACE_VST2=0
+     JUCE_REPORT_APP_USAGE=0)
+ 
++if(ANDROID)
++    juce_add_modules(${AAP_JUCE_DIR}/aap-modules/aap_audio_processors)
++
++    target_include_directories(USF2Plugin PUBLIC
++        "${AAP_DIR}/include"
++        "${AAP_JUCE_DIR}/aap-modules")
++
++    target_compile_definitions(USF2Plugin PUBLIC
++        AAP_JUCE_HAS_HEADLESS_PROCESSOR=1
++        JUCEAAP_HAVE_AUDIO_PLAYHEAD_NEW_POSITION_INFO=1
++        JUCE_ANDROID=1
++        JUCE_DONT_AUTO_OPEN_MIDI_DEVICES_ON_MOBILE=1)
++
++    find_package(androidaudioplugin REQUIRED CONFIG)
++    target_link_libraries(USF2Plugin PRIVATE
++        aap_audio_processors
++        androidaudioplugin::androidaudioplugin)
++endif()
++
+ # GeneralUser GS is compiled into the binary so the plugin makes sound out of the box.
+ res_embed_add(USF2Plugin
+     FILES "${USF2PLUGIN_BUNDLED_SOUNDFONT}"
+@@ -140,6 +206,8 @@ endif()
+ 
+ #### Headless checks
+ 
++if(NOT ANDROID)
++
+ add_executable(sf2_smoke tools/sf2_smoke.cpp src/SoundFontEngine.cpp src/BundledSoundFont.cpp)
+ target_include_directories(sf2_smoke PRIVATE src)
+ 
+@@ -186,3 +254,4 @@ target_compile_definitions(state_smoke PRIVATE
+     JUCE_STANDALONE_APPLICATION=1
+     JUCE_WEB_BROWSER=0
+     JUCE_USE_CURL=0)
++endif()
+diff --git a/src/ui/DirectorySettingsPanel.cpp b/src/ui/DirectorySettingsPanel.cpp
+index 655d40a..4335d83 100644
+--- a/src/ui/DirectorySettingsPanel.cpp
++++ b/src/ui/DirectorySettingsPanel.cpp
+@@ -150,6 +150,14 @@ DirectorySettingsPanel::DirectorySettingsPanel (AppSettings& s) : settings (s)
+     };
+ 
+     settings.addChangeListener (this);
++
++   #if JUCE_ANDROID
++    addButton.setEnabled (false);
++    addButton.setTooltip ("External SoundFont import is not available in this Android build");
++    messageLabel.setText ("This Android build uses its bundled SoundFont.",
++                          juce::dontSendNotification);
++   #endif
++
+     refresh();
+ }
+ 
