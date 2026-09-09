@@ -2,8 +2,11 @@
 
 This project ports [USF2Plugin](https://github.com/atsushieno/usf2plugin) to [Audio Plugins for Android](https://github.com/atsushieno/aap-core) using [aap-juce](https://github.com/atsushieno/aap-juce).
 
-The initial Android build is a self-contained General MIDI instrument using the bundled GeneralUser GS SoundFont. Android external-folder selection is disabled
-because the upstream filesystem-directory workflow is not compatible with scoped storage. App-private SoundFont import is planned as a follow-up.
+The Android build is a self-contained General MIDI instrument using the bundled
+GeneralUser GS SoundFont. Additional SoundFont folders can be selected through
+Android's system folder picker; access is retained through a persistent Storage
+Access Framework permission, and `.sf2` files in nested folders are scanned
+directly without copying them into app-private storage.
 
 ## Build
 
