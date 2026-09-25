@@ -2,7 +2,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 index a488bb3..1a3f913 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -17,12 +17,58 @@ endif()
+@@ -17,12 +17,59 @@ endif()
  # environment variable of the same name) to a directory to share the clones between
  # build trees and projects - JUCE in particular is worth downloading only once.
  
@@ -16,11 +16,12 @@ index a488bb3..1a3f913 100644
 +        NAME JUCE
 +        GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
 +        GIT_TAG 9.0.0
-+        CUSTOM_CACHE_KEY aap-usf2-9.0.0-saf
++        CUSTOM_CACHE_KEY aap-usf2-9.0.0-lifecycle
 +        PATCH_COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/support-plugin-ui.patch
 +        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/export-jni-symbols.patch
 +        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/disable-detach-current-thread.patch
 +        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/juce-component-peer-view-touch.patch
++        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/component-peer-view-unregister-lifecycle-callbacks.patch
 +        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/embedded-peer-window-guard.patch
 +        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/9.0.0/popup-menu-android.patch
 +        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/JUCE-support-Android-CMake.patch
