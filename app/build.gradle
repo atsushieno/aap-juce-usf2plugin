@@ -2,7 +2,7 @@ plugins {
     id "com.android.application"
 }
 
-def cpmSourceCacheDir = System.getenv("HOME") + "/.cache/CPM/usf2plugin"
+def cpmSourceCacheDir = System.getProperty("user.home") + "/.cache/CPM/usf2plugin"
 
 android {
     namespace = "org.androidaudioplugin.ports.juce.usf2plugin"
@@ -21,9 +21,7 @@ android {
 
         externalNativeBuild {
             cmake {
-                arguments "-DAAP_DIR=${System.env.AAP_DIR ?: "$projectDir/../external/aap-core"}",
-                          "-DAAP_JUCE_DIR=${System.env.AAP_JUCE_DIR ?: "$projectDir/../external/aap-juce"}",
-                          "-DCPM_SOURCE_CACHE=$cpmSourceCacheDir",
+                arguments "-DCPM_SOURCE_CACHE=$cpmSourceCacheDir",
                           "-DUSF2PLUGIN_BUILD_CLAP=OFF",
                           "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
                           "-DANDROID_STL=c++_shared",
@@ -72,13 +70,5 @@ android {
 }
 
 // CMake population creates the stable JUCE source symlink used by sourceSets.
-afterEvaluate {
-    def configureCMakeTasks = tasks.matching { it.name.startsWith("configureCMake") }
-    tasks.matching {
-        it.name.matches("compile.*JavaWithJavac") ||
-            it.name.startsWith("lintAnalyze") ||
-            it.name.startsWith("lintVitalAnalyze")
-    }.configureEach {
-        dependsOn configureCMakeTasks
-    }
-}
+
+apply from: '../external/aap-juce/gradle/aap-juce.gradle'

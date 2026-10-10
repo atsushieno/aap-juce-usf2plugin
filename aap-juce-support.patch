@@ -1,73 +1,35 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index a488bb3..1a3f913 100644
+index a488bb3..fcdac4b 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -17,12 +17,59 @@ endif()
+@@ -1,6 +1,11 @@
+ # ResEmbed's own CMakeLists requires 3.29, so that is this project's real floor.
+ cmake_minimum_required(VERSION 3.29)
+ 
++get_filename_component(app_source "${CMAKE_CURRENT_LIST_DIR}" REALPATH)
++add_subdirectory("${app_source}/../aap-juce" "${CMAKE_CURRENT_BINARY_DIR}/aap-juce" EXCLUDE_FROM_ALL)
++aap_juce_configure(JUCE_SOURCE_DIR modules/juce SOURCE_CACHE "${CPM_SOURCE_CACHE}"
++    JUCE_CPM_ARGS NAME JUCE GIT_REPOSITORY https://github.com/juce-framework/JUCE.git GIT_TAG 9.0.0 CUSTOM_CACHE_KEY aap-usf2-9.0.0-lifecycle)
++
+ project(USF2Plugin VERSION 0.1.0 LANGUAGES C CXX)
+ 
+ set(CMAKE_CXX_STANDARD 20)
+@@ -17,13 +22,9 @@ endif()
  # environment variable of the same name) to a directory to share the clones between
  # build trees and projects - JUCE in particular is worth downloading only once.
  
--include(cmake/CPM.cmake)
-+if(ANDROID)
-+    include(${AAP_JUCE_DIR}/cmake/CPM.cmake)
-+    # AAP hosts the editor in another Android component, so JUCE must be patched
-+    # before it is configured. A distinct cache key prevents an unpatched JUCE 9
-+    # checkout from being reused by CPM.
-+    CPMAddPackage(
-+        NAME JUCE
-+        GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-+        GIT_TAG 9.0.0
-+        CUSTOM_CACHE_KEY aap-usf2-9.0.0-lifecycle
-+        PATCH_COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/support-plugin-ui.patch
-+        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/export-jni-symbols.patch
-+        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/disable-detach-current-thread.patch
-+        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/juce-component-peer-view-touch.patch
-+        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/component-peer-view-unregister-lifecycle-callbacks.patch
-+        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/8.0.12/embedded-peer-window-guard.patch
-+        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/9.0.0/popup-menu-android.patch
-+        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/JUCE-support-Android-CMake.patch
-+        # Upstream JUCE 8.0.x-9.0.x never wires AndroidDocumentIterator to the SAF
-+        # (DocumentsContract) engine, so scanning a content:// SoundFont tree returns
-+        # nothing.
-+        COMMAND git apply --ignore-space-change ${AAP_JUCE_DIR}/juce-patches/9.0.0/android-document-iterator-saf.patch)
++add_subdirectory(modules/juce "${CMAKE_CURRENT_BINARY_DIR}/JUCE")
+ include(cmake/CPM.cmake)
  
 -CPMAddPackage(
 -    NAME JUCE
 -    GITHUB_REPOSITORY juce-framework/JUCE
 -    GIT_TAG 9.0.0)
-+    file(READ "${JUCE_SOURCE_DIR}/modules/juce_gui_basics/native/java/app/com/rmsl/juce/ComponentPeerView.java"
-+         _AAP_JUCE_PATCH_PROBE)
-+    if(NOT _AAP_JUCE_PATCH_PROBE MATCHES "getLocationOnScreen")
-+        message(FATAL_ERROR
-+            "JUCE source cache is stale or the AAP patches were not applied: ${JUCE_SOURCE_DIR}")
-+    endif()
-+
-+    file(READ "${JUCE_SOURCE_DIR}/modules/juce_core/native/juce_AndroidDocument_android.cpp"
-+         _AAP_JUCE_SAF_PROBE)
-+    if(NOT _AAP_JUCE_SAF_PROBE MATCHES "makeDocumentsContractIteratorEngine \\(nativeInfo.uri\\)")
-+        message(FATAL_ERROR
-+            "JUCE source cache is stale or android-document-iterator-saf.patch was not applied: ${JUCE_SOURCE_DIR}")
-+    endif()
-+
-+    # Gradle compiles JUCE's Android Java sources through this stable path.
-+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/modules")
-+    file(REMOVE "${CMAKE_CURRENT_SOURCE_DIR}/modules/juce")
-+    file(CREATE_LINK "${JUCE_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/modules/juce"
-+         SYMBOLIC RESULT _AAP_JUCE_LINK_RESULT)
-+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/modules/juce/CMakeLists.txt")
-+        message(FATAL_ERROR
-+            "Could not link modules/juce to JUCE (${_AAP_JUCE_LINK_RESULT})")
-+    endif()
-+else()
-+    include(cmake/CPM.cmake)
-+    CPMAddPackage(
-+        NAME JUCE
-+        GITHUB_REPOSITORY juce-framework/JUCE
-+        GIT_TAG 9.0.0)
-+endif()
- 
+-
  # Header only, so there is nothing to build: TSF_IMPLEMENTATION is defined in
  # SoundFontEngine.cpp. The pinned commit is the fork's split-render branch, which adds
-@@ -47,6 +93,10 @@ CPMAddPackage(
+ # tsf_render_float_separate() for rendering straight into JUCE's channel pointers.
+@@ -47,6 +48,10 @@ CPMAddPackage(
  
  option(USF2PLUGIN_BUILD_CLAP "Build the CLAP target (fetches clap-juce-extensions)" ON)
  
@@ -78,7 +40,7 @@ index a488bb3..1a3f913 100644
  if(USF2PLUGIN_BUILD_CLAP)
      # Brings its own clap/clap-helpers submodules along.
      CPMAddPackage(
-@@ -66,6 +116,14 @@ target_include_directories(tinysoundfont SYSTEM INTERFACE ${TinySoundFont_SOURCE
+@@ -66,6 +71,14 @@ target_include_directories(tinysoundfont SYSTEM INTERFACE ${TinySoundFont_SOURCE
  
  # The identity is the one the DPF version published, so hosts see this as the same
  # plugin rather than a new one: AU 'USF2'/'AENO', the same CLAP id and LV2 URI.
@@ -93,7 +55,7 @@ index a488bb3..1a3f913 100644
  juce_add_plugin(USF2Plugin
      PRODUCT_NAME "USF2Plugin"
      COMPANY_NAME "atsushieno"
-@@ -73,13 +131,13 @@ juce_add_plugin(USF2Plugin
+@@ -73,13 +86,13 @@ juce_add_plugin(USF2Plugin
      BUNDLE_ID "dev.atsushieno.usf2plugin"
      PLUGIN_MANUFACTURER_CODE AENO
      PLUGIN_CODE USF2
@@ -109,7 +71,7 @@ index a488bb3..1a3f913 100644
      LV2URI "https://github.com/atsushieno/usf2plugin"
      VST3_CATEGORIES "Instrument" "Synth"
      AU_MAIN_TYPE "kAudioUnitType_MusicDevice")
-@@ -109,6 +167,25 @@ target_compile_definitions(USF2Plugin PUBLIC
+@@ -109,6 +122,25 @@ target_compile_definitions(USF2Plugin PUBLIC
      JUCE_VST3_CAN_REPLACE_VST2=0
      JUCE_REPORT_APP_USAGE=0)
  
@@ -135,7 +97,7 @@ index a488bb3..1a3f913 100644
  # GeneralUser GS is compiled into the binary so the plugin makes sound out of the box.
  res_embed_add(USF2Plugin
      FILES "${USF2PLUGIN_BUNDLED_SOUNDFONT}"
-@@ -140,6 +217,8 @@ endif()
+@@ -140,6 +172,8 @@ endif()
  
  #### Headless checks
  
@@ -144,7 +106,7 @@ index a488bb3..1a3f913 100644
  add_executable(sf2_smoke tools/sf2_smoke.cpp src/SoundFontEngine.cpp src/BundledSoundFont.cpp)
  target_include_directories(sf2_smoke PRIVATE src)
  
-@@ -186,3 +265,4 @@ target_compile_definitions(state_smoke PRIVATE
+@@ -186,3 +220,4 @@ target_compile_definitions(state_smoke PRIVATE
      JUCE_STANDALONE_APPLICATION=1
      JUCE_WEB_BROWSER=0
      JUCE_USE_CURL=0)

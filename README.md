@@ -13,10 +13,10 @@ directly without copying them into app-private storage.
 Initialize the submodules, then run:
 
 ```sh
-make
+./gradlew build
 ```
 
-The Makefile publishes the local AAP dependencies, applies `aap-juce-support.patch` to the pinned plugin source, and builds the Android APK and app bundle. Direct `./gradlew` builds expect the upstream patch to have already been applied.
+Gradle prepares and patches the application and JUCE sources before the Android build. Use `gradlew.bat build` on Windows, and `./gradlew bundleRelease` to produce the release app bundle.
 
 See [PORTING_PLAN.md](PORTING_PLAN.md) for the investigation, known constraints, and device verification checklist.
 
