@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index a488bb3..fcdac4b 100644
+index a488bb3..4110283 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -1,6 +1,11 @@
@@ -71,33 +71,16 @@ index a488bb3..fcdac4b 100644
      LV2URI "https://github.com/atsushieno/usf2plugin"
      VST3_CATEGORIES "Instrument" "Synth"
      AU_MAIN_TYPE "kAudioUnitType_MusicDevice")
-@@ -109,6 +122,25 @@ target_compile_definitions(USF2Plugin PUBLIC
+@@ -109,6 +122,8 @@ target_compile_definitions(USF2Plugin PUBLIC
      JUCE_VST3_CAN_REPLACE_VST2=0
      JUCE_REPORT_APP_USAGE=0)
  
-+if(ANDROID)
-+    juce_add_modules(${AAP_JUCE_DIR}/aap-modules/aap_audio_processors)
-+
-+    target_include_directories(USF2Plugin PUBLIC
-+        "${AAP_DIR}/include"
-+        "${AAP_JUCE_DIR}/aap-modules")
-+
-+    target_compile_definitions(USF2Plugin PUBLIC
-+        AAP_JUCE_HAS_HEADLESS_PROCESSOR=1
-+        JUCEAAP_HAVE_AUDIO_PLAYHEAD_NEW_POSITION_INFO=1
-+        JUCE_ANDROID=1
-+        JUCE_DONT_AUTO_OPEN_MIDI_DEVICES_ON_MOBILE=1)
-+
-+    find_package(androidaudioplugin REQUIRED CONFIG)
-+    target_link_libraries(USF2Plugin PRIVATE
-+        aap_audio_processors
-+        androidaudioplugin::androidaudioplugin)
-+endif()
++aap_juce_plugin(TARGET USF2Plugin)
 +
  # GeneralUser GS is compiled into the binary so the plugin makes sound out of the box.
  res_embed_add(USF2Plugin
      FILES "${USF2PLUGIN_BUNDLED_SOUNDFONT}"
-@@ -140,6 +172,8 @@ endif()
+@@ -140,6 +155,8 @@ endif()
  
  #### Headless checks
  
@@ -106,7 +89,7 @@ index a488bb3..fcdac4b 100644
  add_executable(sf2_smoke tools/sf2_smoke.cpp src/SoundFontEngine.cpp src/BundledSoundFont.cpp)
  target_include_directories(sf2_smoke PRIVATE src)
  
-@@ -186,3 +220,4 @@ target_compile_definitions(state_smoke PRIVATE
+@@ -186,3 +203,4 @@ target_compile_definitions(state_smoke PRIVATE
      JUCE_STANDALONE_APPLICATION=1
      JUCE_WEB_BROWSER=0
      JUCE_USE_CURL=0)
