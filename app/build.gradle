@@ -23,7 +23,7 @@ android {
             cmake {
                 arguments "-DCPM_SOURCE_CACHE=$cpmSourceCacheDir",
                           "-DUSF2PLUGIN_BUILD_CLAP=OFF",
-                          "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+                          "-DCMAKE_BUILD_TYPE=Release",
                           "-DANDROID_STL=c++_shared",
                           "-DANDROID_CPP_FEATURES=exceptions rtti"
             }
