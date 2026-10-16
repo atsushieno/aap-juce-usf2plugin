@@ -7,3 +7,6 @@
 [submodule "external/usf2plugin"]
 	path = external/usf2plugin
 	url = https://github.com/atsushieno/usf2plugin.git
+[submodule "external/soundpack-provider-for-android"]
+	path = external/soundpack-provider-for-android
+	url = https://github.com/atsushieno/soundpack-provider-for-android
