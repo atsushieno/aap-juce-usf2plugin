@@ -14,6 +14,7 @@ android {
         targetSdk = libs.versions.android.targetSdk.get().toInteger()
         versionCode = 1
         versionName = "0.1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
             abiFilters "x86_64", "arm64-v8a"
@@ -55,6 +56,12 @@ android {
         implementation libs.aap.ui.web
         implementation libs.aap.ui.compose
         implementation libs.aap.ui.compose.app
+        // SF2 folders and packs through soundpack-provider-for-android (its C API is a prefab
+        // package the native build links; in Maven Local until its V1 release).
+        implementation "org.androidaudioplugin.soundpack:soundpack-native:0.1.0-dev"
+
+        androidTestImplementation libs.test.ext.junit
+        androidTestImplementation libs.androidx.rules
     }
 
     buildFeatures {

@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index a488bb3..4110283 100644
+index a488bb3..9782231 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -1,6 +1,11 @@
@@ -80,7 +80,22 @@ index a488bb3..4110283 100644
  # GeneralUser GS is compiled into the binary so the plugin makes sound out of the box.
  res_embed_add(USF2Plugin
      FILES "${USF2PLUGIN_BUNDLED_SOUNDFONT}"
-@@ -140,6 +155,8 @@ endif()
+@@ -132,6 +147,14 @@ if(APPLE)
+     target_link_libraries(USF2Plugin PRIVATE "-framework CoreServices")
+ endif()
+ 
++if(ANDROID)
++    # SF2 folders, SF2 pack apps and the Soundpack Manager, through the soundpack C API
++    # (soundpack-provider-for-android; its prefab package comes with the app's dependency).
++    find_package(soundpack-native REQUIRED CONFIG)
++    target_sources(USF2Plugin PRIVATE src/android/Soundpacks.cpp)
++    target_link_libraries(USF2Plugin PRIVATE soundpack-native::soundpack)
++endif()
++
+ if(USF2PLUGIN_BUILD_CLAP)
+     clap_juce_extensions_plugin(TARGET USF2Plugin
+         CLAP_ID "dev.atsushieno.usf2plugin"
+@@ -140,6 +163,8 @@ endif()
  
  #### Headless checks
  
@@ -89,21 +104,31 @@ index a488bb3..4110283 100644
  add_executable(sf2_smoke tools/sf2_smoke.cpp src/SoundFontEngine.cpp src/BundledSoundFont.cpp)
  target_include_directories(sf2_smoke PRIVATE src)
  
-@@ -186,3 +203,4 @@ target_compile_definitions(state_smoke PRIVATE
+@@ -186,3 +211,4 @@ target_compile_definitions(state_smoke PRIVATE
      JUCE_STANDALONE_APPLICATION=1
      JUCE_WEB_BROWSER=0
      JUCE_USE_CURL=0)
 +endif()
 diff --git a/src/AppSettings.cpp b/src/AppSettings.cpp
-index 9544a08..f7d3c69 100644
+index 9544a08..09daef1 100644
 --- a/src/AppSettings.cpp
 +++ b/src/AppSettings.cpp
-@@ -4,6 +4,43 @@ namespace usf2 {
+@@ -1,9 +1,76 @@
+ #include "AppSettings.h"
+ 
++#if JUCE_ANDROID
++ #include "android/Soundpacks.h"
++#endif
++
+ namespace usf2 {
  
  static const char* folderListKey = "sf2Folders";
  
 +bool SoundFontDirectory::isAvailable() const
 +{
++    if (isLinkedFolder())
++        return available;
++
 +   #if JUCE_ANDROID
 +    if (isDocumentTree())
 +    {
@@ -136,13 +161,36 @@ index 9544a08..f7d3c69 100644
 +
 +juce::String SoundFontDirectory::storageKey() const
 +{
++    if (isLinkedFolder())
++        return "soundpack:" + folderId;
++
 +    return isDocumentTree() ? treeUrl : file.getFullPathName();
 +}
++
++#if JUCE_ANDROID
++namespace
++{
++    // On Android, the custom directories are the folders linked through the soundpack
++    // libraries; tree URLs left in the list by older versions are migrated (and skipped).
++    void addLinkedFolders (juce::Array<SoundFontDirectory>& result)
++    {
++        for (const auto& folder : soundpacks::folders())
++        {
++            SoundFontDirectory directory;
++            directory.treeUrl = folder.treeUrl;
++            directory.name = folder.name;
++            directory.folderId = folder.id;
++            directory.available = folder.available;
++            result.add (directory);
++        }
++    }
++}
++#endif
 +
  AppSettings::AppSettings()
  {
      juce::PropertiesFile::Options options;
-@@ -73,31 +110,32 @@ juce::Array<AppSettings::DefaultDirectory> AppSettings::defaultDirectories() con
+@@ -73,33 +140,52 @@ juce::Array<AppSettings::DefaultDirectory> AppSettings::defaultDirectories() con
      return result;
  }
  
@@ -159,10 +207,19 @@ index 9544a08..f7d3c69 100644
  
 -        if (! isBuiltIn (f))
 -            result.add (f);
++       #if JUCE_ANDROID
++        if (directory.isDocumentTree())
++            continue;
++       #endif
++
 +        if (directory.isDocumentTree() || ! isBuiltIn (directory.file))
 +            result.add (directory);
      }
  
++   #if JUCE_ANDROID
++    addLinkedFolders (result);
++   #endif
++
      return result;
  }
  
@@ -179,13 +236,24 @@ index 9544a08..f7d3c69 100644
  
 -        if (f != juce::File() && ! result.contains (f))
 -            result.add (f);
++       #if JUCE_ANDROID
++        if (directory.isDocumentTree())
++            continue;
++       #endif
++
 +        if ((directory.isDocumentTree() || directory.file != juce::File())
 +              && ! result.contains (directory))
 +            result.add (directory);
      }
  
++   #if JUCE_ANDROID
++    addLinkedFolders (result);
++   #endif
++
      return result;
-@@ -173,6 +211,51 @@ void AppSettings::removeCustomDirectory (const juce::File& directory)
+ }
+ 
+@@ -173,6 +259,100 @@ void AppSettings::removeCustomDirectory (const juce::File& directory)
      writeList (list);
  }
  
@@ -203,19 +271,38 @@ index 9544a08..f7d3c69 100644
 +        return false;
 +
 +    const auto key = url.toString (true);
-+    auto list = readList();
 +
-+    if (list.contains (key))
-+        return false;
++    for (const auto& folder : soundpacks::folders())
++        if (folder.treeUrl == key)
++            return false;
 +
++    // Keep the picker's grant now: linking scans the folder, which can take a while.
 +    juce::AndroidDocumentPermission::takePersistentReadWriteAccess (url);
-+    list.add (key);
-+    writeList (list);
++
++    juce::Thread::launch ([key]
++    {
++        juce::String error;
++
++        if (soundpacks::addFolder (key, error).isEmpty())
++            juce::Logger::outputDebugString ("usf2plugin: cannot link " + key + ": " + error);
++
++        juce::SharedResourcePointer<AppSettings>()->sendChangeMessage();
++    });
++
 +    return true;
 +}
 +
 +void AppSettings::removeCustomDirectory (const SoundFontDirectory& directory)
 +{
++    if (directory.isLinkedFolder())
++    {
++        soundpacks::removeFolder (directory.folderId);
++        juce::AndroidDocumentPermission::releasePersistentReadWriteAccess (
++            juce::URL (directory.treeUrl));
++        sendChangeMessage();
++        return;
++    }
++
 +    if (! directory.isDocumentTree())
 +    {
 +        removeCustomDirectory (directory.file);
@@ -232,12 +319,42 @@ index 9544a08..f7d3c69 100644
 +    juce::AndroidDocumentPermission::releasePersistentReadWriteAccess (
 +        juce::URL (directory.treeUrl));
 +}
++
++void AppSettings::migrateLegacyFolders()
++{
++    static juce::CriticalSection migrating;
++    const juce::ScopedLock sl (migrating);
++
++    juce::StringArray legacy;
++
++    for (const auto& key : readList())
++        if (key.startsWithIgnoreCase ("content://"))
++            legacy.add (key);
++
++    if (legacy.isEmpty())
++        return;
++
++    for (const auto& key : legacy)
++    {
++        juce::String error;
++
++        if (soundpacks::addFolder (key, error).isEmpty())
++            juce::Logger::outputDebugString ("usf2plugin: folder " + key + " was not carried over: " + error);
++    }
++
++    auto list = readList();
++
++    for (const auto& key : legacy)
++        list.removeString (key);
++
++    writeList (list);
++}
 +#endif
 +
  juce::File AppSettings::settingsFile() const
  {
      return properties.getUserSettings()->getFile();
-@@ -206,4 +289,25 @@ bool AppSettings::isBuiltIn (const juce::File& directory)
+@@ -206,4 +386,25 @@ bool AppSettings::isBuiltIn (const juce::File& directory)
      return builtInDirectories().contains (directory);
  }
  
@@ -264,10 +381,10 @@ index 9544a08..f7d3c69 100644
 +
  } // namespace usf2
 diff --git a/src/AppSettings.h b/src/AppSettings.h
-index 3ea117d..450d195 100644
+index 3ea117d..c75f55f 100644
 --- a/src/AppSettings.h
 +++ b/src/AppSettings.h
-@@ -4,6 +4,30 @@
+@@ -4,6 +4,33 @@
  
  namespace usf2 {
  
@@ -283,8 +400,11 @@ index 3ea117d..450d195 100644
 +    juce::File file;
 +    juce::String treeUrl;
 +    juce::String name;
++    juce::String folderId;   // Android: a folder linked through the soundpack libraries
++    bool available = true;   // for a linked folder, as of its last scan
 +
 +    bool isDocumentTree() const { return treeUrl.isNotEmpty(); }
++    bool isLinkedFolder() const { return folderId.isNotEmpty(); }
 +    bool isAvailable() const;
 +    juce::String displayName() const;
 +    juce::String storageKey() const;
@@ -298,7 +418,7 @@ index 3ea117d..450d195 100644
  //==============================================================================
  /** Application-wide settings, shared by every plugin instance in a host and stored
      outside the plugin state (a host session does not own the user's folder layout).
-@@ -34,10 +58,10 @@ public:
+@@ -34,10 +61,10 @@ public:
      juce::Array<DefaultDirectory> defaultDirectories() const;
  
      /** Directories the user added that are not built-in defaults. */
@@ -311,21 +431,26 @@ index 3ea117d..450d195 100644
  
      void setDefaultEnabled (const juce::File& directory, bool shouldBeEnabled);
  
-@@ -45,6 +69,13 @@ public:
+@@ -45,6 +72,18 @@ public:
      bool addCustomDirectory (const juce::File& directory);
      void removeCustomDirectory (const juce::File& directory);
  
 +   #if JUCE_ANDROID
-+    /** Adds a folder selected by Android's system document picker. The exact URL
-+        returned by the picker is retained so its persistent permission remains valid. */
++    /** Links a folder selected by Android's system document picker through the soundpack
++        libraries, which keep its grant and index its SoundFonts. Linking scans the folder, so
++        it finishes in the background, followed by a change message. */
 +    bool addCustomDirectory (const juce::URL& treeUrl);
 +    void removeCustomDirectory (const SoundFontDirectory& directory);
++
++    /** Once: links the folders older versions kept as tree URLs in this list, reusing their
++        grants, and drops them from the list. Blocks on IPC and folder scans. */
++    void migrateLegacyFolders();
 +   #endif
 +
      /** The settings file itself, for diagnostics. */
      juce::File settingsFile() const;
  
-@@ -52,6 +83,7 @@ private:
+@@ -52,6 +91,7 @@ private:
      juce::StringArray readList() const;
      void writeList (const juce::StringArray& list);
      static bool isBuiltIn (const juce::File& directory);
@@ -334,10 +459,20 @@ index 3ea117d..450d195 100644
      mutable juce::ApplicationProperties properties;
      juce::CriticalSection lock;
 diff --git a/src/PluginProcessor.cpp b/src/PluginProcessor.cpp
-index b2a1b0b..70b9ed6 100644
+index b2a1b0b..130e058 100644
 --- a/src/PluginProcessor.cpp
 +++ b/src/PluginProcessor.cpp
-@@ -218,8 +218,7 @@ void USF2PluginProcessor::loadSoundFont (const SoundFontFile& entry)
+@@ -1,5 +1,9 @@
+ #include "PluginProcessor.h"
+ 
++#if JUCE_ANDROID
++ #include "android/Soundpacks.h"
++#endif
++
+ #include "PluginEditor.h"
+ 
+ #ifndef JucePlugin_Name
+@@ -218,8 +222,7 @@ void USF2PluginProcessor::loadSoundFont (const SoundFontFile& entry)
      if (! entry.isValid())
          return;
  
@@ -347,35 +482,63 @@ index b2a1b0b..70b9ed6 100644
  
      {
          const juce::ScopedLock sl (dataLock);
-@@ -232,9 +231,13 @@ void USF2PluginProcessor::loadSoundFont (const SoundFontFile& entry)
+@@ -232,9 +235,36 @@ void USF2PluginProcessor::loadSoundFont (const SoundFontFile& entry)
  
      loaderPool.addJob ([this, safeThis, entry, displayName]
      {
-+        juce::MemoryBlock externalData;
-         auto* loaded = entry.bundled
-                          ? soundFontEngine.loadSoundFont (bundled::data(), bundled::size())
+-        auto* loaded = entry.bundled
+-                         ? soundFontEngine.loadSoundFont (bundled::data(), bundled::size())
 -                         : soundFontEngine.loadSoundFont (entry.file);
-+                         : entry.loadData (externalData)
-+                               ? soundFontEngine.loadSoundFont (externalData.getData(),
-+                                                               externalData.getSize())
-+                               : nullptr;
++        tsf* loaded = nullptr;
++        bool silent = false;
++        juce::String failure;
++
++        // A file whose sample chunk is empty loads and lists its presets perfectly,
++        // and then plays nothing. Say so rather than leaving the user to wonder.
++        auto load = [&] (const void* data, size_t size)
++        {
++            loaded = soundFontEngine.loadSoundFont (data, size);
++            silent = loaded != nullptr && ! hasSampleData (data, size);
++        };
++
++        if (entry.bundled)
++        {
++            load (bundled::data(), bundled::size());
++        }
++       #if JUCE_ANDROID
++        else if (entry.identity.isNotEmpty())
++        {
++            // Mapped, not copied: tsf keeps its own copy of what it needs.
++            soundpacks::withMappedEntry (entry.identity, load, failure);
++        }
++       #endif
++        else
++        {
++            juce::MemoryBlock externalData;
++
++            if (entry.loadData (externalData))
++                load (externalData.getData(), externalData.getSize());
++        }
  
          auto loadedPresets = enumeratePresets (loaded);
  
-@@ -247,8 +250,10 @@ void USF2PluginProcessor::loadSoundFont (const SoundFontFile& entry)
-         // A file whose sample chunk is empty loads and lists its presets perfectly,
-         // and then plays nothing. Say so rather than leaving the user to wonder.
-         const auto silent = loaded != nullptr
+@@ -244,14 +274,9 @@ void USF2PluginProcessor::loadSoundFont (const SoundFontFile& entry)
+             resendRegisteredParameters();
+         }
+ 
+-        // A file whose sample chunk is empty loads and lists its presets perfectly,
+-        // and then plays nothing. Say so rather than leaving the user to wonder.
+-        const auto silent = loaded != nullptr
 -                              && ! (entry.bundled ? hasSampleData (bundled::data(), bundled::size())
 -                                                  : hasSampleData (entry.file));
-+                              && ! (entry.bundled
-+                                      ? hasSampleData (bundled::data(), bundled::size())
-+                                      : hasSampleData (externalData.getData(),
-+                                                       externalData.getSize()));
- 
+-
          const auto status = loaded == nullptr
                                ? "Failed to load " + displayName
-@@ -437,11 +442,10 @@ void USF2PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
++                                    + (failure.isNotEmpty() ? " (" + failure + ")" : juce::String())
+                               : displayName + " ("
+                                     + juce::String ((int) loadedPresets.size()) + " presets)"
+                                     + (silent ? " - WARNING: this file contains no sample "
+@@ -437,11 +462,10 @@ void USF2PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
      xml.setAttribute ("version", 2);
      xml.setAttribute ("omniChannel", omniChannel.load (std::memory_order_relaxed));
      xml.setAttribute ("sf2Bundled", entry.bundled ? 1 : 0);
@@ -385,17 +548,23 @@ index b2a1b0b..70b9ed6 100644
 +    xml.setAttribute ("sf2Relative", entry.relativePath);
      xml.setAttribute ("sf2Absolute", entry.bundled ? juce::String()
 -                                                   : entry.file.getFullPathName());
-+                      : entry.documentUrl.isNotEmpty() ? entry.documentUrl
-+                                                      : entry.file.getFullPathName());
++                      : entry.identity.isNotEmpty() ? entry.identity
++                                                    : entry.file.getFullPathName());
      xml.createNewChildElement ("Midi")
         ->addTextElement (juce::Base64::toBase64 (smf.getData(), smf.getSize()));
  
 diff --git a/src/SoundFontLibrary.cpp b/src/SoundFontLibrary.cpp
-index 23c2f41..f1a6779 100644
+index 23c2f41..9b0efc6 100644
 --- a/src/SoundFontLibrary.cpp
 +++ b/src/SoundFontLibrary.cpp
-@@ -7,6 +7,54 @@
+@@ -5,8 +5,47 @@
  
+ #include <algorithm>
+ 
++#if JUCE_ANDROID
++ #include "android/Soundpacks.h"
++#endif
++
  namespace usf2 {
  
 +bool SoundFontFile::isValid() const
@@ -403,14 +572,9 @@ index 23c2f41..f1a6779 100644
 +    if (bundled)
 +        return true;
 +
-+   #if JUCE_ANDROID
-+    if (documentUrl.isNotEmpty())
-+    {
-+        const auto document = juce::AndroidDocument::fromDocument (juce::URL (documentUrl));
-+        return document.hasValue() && document.getInfo().isFile()
-+            && document.getInfo().canRead();
-+    }
-+   #endif
++    // Whether it can be opened is known only when it is loaded.
++    if (identity.isNotEmpty())
++        return true;
 +
 +    return file.existsAsFile();
 +}
@@ -425,14 +589,6 @@ index 23c2f41..f1a6779 100644
 +
 +std::unique_ptr<juce::InputStream> SoundFontFile::createInputStream() const
 +{
-+   #if JUCE_ANDROID
-+    if (documentUrl.isNotEmpty())
-+    {
-+        const auto document = juce::AndroidDocument::fromDocument (juce::URL (documentUrl));
-+        return document.hasValue() ? document.createInputStream() : nullptr;
-+    }
-+   #endif
-+
 +    return file.createInputStream();
 +}
 +
@@ -449,94 +605,31 @@ index 23c2f41..f1a6779 100644
  namespace
  {
      // Changes arrive in bursts (a copy is many writes); wait for quiet before rescanning.
-@@ -153,6 +201,77 @@ namespace
+@@ -153,6 +192,7 @@ namespace
  
          return false;
      }
 +
-+   #if JUCE_ANDROID
-+    void scanDocumentTree (const juce::AndroidDocument& parent,
-+                           const SoundFontDirectory& root,
-+                           const juce::String& prefix,
-+                           std::vector<SoundFontFile>& found,
-+                           const std::function<bool()>& shouldStop)
-+    {
-+        for (const auto& child : juce::AndroidDocumentIterator::makeNonRecursive (parent))
-+        {
-+            if (shouldStop())
-+                return;
-+
-+            const auto info = child.getInfo();
-+            const auto relativePath = prefix.isEmpty() ? info.getName()
-+                                                        : prefix + "/" + info.getName();
-+
-+            if (info.isDirectory())
-+            {
-+                scanDocumentTree (child, root, relativePath, found, shouldStop);
-+            }
-+            else if (info.isFile() && info.getName().endsWithIgnoreCase (".sf2"))
-+            {
-+                SoundFontFile discovered;
-+                discovered.root = root;
-+                discovered.documentUrl = child.getUrl().toString (true);
-+                discovered.name = info.getName();
-+                discovered.relativePath = relativePath;
-+
-+                if (auto stream = child.createInputStream())
-+                    discovered.presets = readPresetHeaders (*stream);
-+
-+                found.push_back (std::move (discovered));
-+            }
-+        }
-+    }
-+
-+    juce::AndroidDocument findDocument (const SoundFontDirectory& root,
-+                                        const juce::String& relativePath)
-+    {
-+        auto current = juce::AndroidDocument::fromTree (juce::URL (root.treeUrl));
-+
-+        if (! current.hasValue())
-+            return {};
-+
-+        juce::StringArray components;
-+        components.addTokens (relativePath.replaceCharacter ('\\', '/'), "/", {});
-+        components.removeEmptyStrings();
-+
-+        for (const auto& component : components)
-+        {
-+            juce::AndroidDocument next;
-+
-+            for (const auto& child : juce::AndroidDocumentIterator::makeNonRecursive (current))
-+            {
-+                if (child.getInfo().getName() == component)
-+                {
-+                    next = child;
-+                    break;
-+                }
-+            }
-+
-+            if (! next.hasValue())
-+                return {};
-+
-+            current = std::move (next);
-+        }
-+
-+        return current;
-+    }
-+   #endif
  }
  
  std::vector<PresetInfo> enumeratePresets (tsf* soundFont)
-@@ -230,7 +349,7 @@ SoundFontLibrary::~SoundFontLibrary()
+@@ -230,10 +270,14 @@ SoundFontLibrary::~SoundFontLibrary()
      watcher.stop();
  }
  
 -void SoundFontLibrary::rescan (const juce::Array<juce::File>& directories)
-+void SoundFontLibrary::rescan (const juce::Array<SoundFontDirectory>& directories)
++void SoundFontLibrary::rescan (const juce::Array<SoundFontDirectory>& directories,
++                               bool rescanLinkedFolders)
  {
      stopThread (2000);
  
-@@ -274,7 +393,7 @@ std::vector<SoundFontFile> SoundFontLibrary::files() const
++    if (rescanLinkedFolders)
++        linkedFoldersNeedRescan.store (true);
++
+     {
+         const juce::ScopedLock sl (lock);
+         directoriesToScan = directories;
+@@ -274,7 +318,7 @@ std::vector<SoundFontFile> SoundFontLibrary::files() const
      return all;
  }
  
@@ -545,7 +638,7 @@ index 23c2f41..f1a6779 100644
  {
      const juce::ScopedLock sl (lock);
      return directoriesToScan;
-@@ -282,7 +401,7 @@ juce::Array<juce::File> SoundFontLibrary::directories() const
+@@ -282,7 +326,7 @@ juce::Array<juce::File> SoundFontLibrary::directories() const
  
  void SoundFontLibrary::run()
  {
@@ -554,33 +647,24 @@ index 23c2f41..f1a6779 100644
  
      {
          const juce::ScopedLock sl (lock);
-@@ -297,10 +416,23 @@ void SoundFontLibrary::run()
+@@ -297,10 +341,14 @@ void SoundFontLibrary::run()
          if (threadShouldExit())
              return;
  
 -        if (! root.isDirectory())
-+       #if JUCE_ANDROID
++        // Linked folders are listed through the soundpack libraries below.
 +        if (root.isDocumentTree())
-+        {
-+            const auto document = juce::AndroidDocument::fromTree (juce::URL (root.treeUrl));
-+
-+            if (document.hasValue())
-+                scanDocumentTree (document, root, {}, found,
-+                                  [this] { return threadShouldExit(); });
-+
-             continue;
-+        }
-+       #endif
- 
--        for (const auto& entry : juce::RangedDirectoryIterator (root, true, "*",
-+        if (! root.file.isDirectory())
 +            continue;
 +
++        if (! root.file.isDirectory())
+             continue;
+ 
+-        for (const auto& entry : juce::RangedDirectoryIterator (root, true, "*",
 +        for (const auto& entry : juce::RangedDirectoryIterator (root.file, true, "*",
                                                                  juce::File::findFilesAndDirectories))
          {
              if (threadShouldExit())
-@@ -317,7 +449,7 @@ void SoundFontLibrary::run()
+@@ -317,13 +365,35 @@ void SoundFontLibrary::run()
                  SoundFontFile discovered;
                  discovered.file = file;
                  discovered.root = root;
@@ -589,7 +673,35 @@ index 23c2f41..f1a6779 100644
                  discovered.presets = readPresetHeaders (file);
                  found.push_back (std::move (discovered));
              }
-@@ -337,7 +469,13 @@ void SoundFontLibrary::run()
+         }
+     }
+ 
++   #if JUCE_ANDROID
++    // Linked folders, SF2 pack apps and the Soundpack Manager's folders. Presets come from
++    // their index: no SoundFont is opened here.
++    juce::SharedResourcePointer<AppSettings>()->migrateLegacyFolders();
++
++    if (linkedFoldersNeedRescan.exchange (false))
++        soundpacks::rescanFolders();
++
++    if (threadShouldExit())
++        return;
++
++    for (auto& entry : soundpacks::listEntries())
++    {
++        SoundFontFile discovered;
++        discovered.identity = entry.identity;
++        discovered.name = entry.path.fromLastOccurrenceOf ("/", false, false);
++        discovered.relativePath = entry.packLabel + "/" + entry.path;
++        discovered.presets = std::move (entry.presets);
++        found.push_back (std::move (discovered));
++    }
++   #endif
++
+     std::sort (found.begin(), found.end(), [] (const auto& a, const auto& b)
+     {
+         return a.relativePath.compareNatural (b.relativePath) < 0;
+@@ -337,7 +407,13 @@ void SoundFontLibrary::run()
  
      // Watch from the scanning thread: arming the watcher touches the file system.
      watcherFired.store (false, std::memory_order_relaxed);
@@ -604,33 +716,59 @@ index 23c2f41..f1a6779 100644
  
      sendChangeMessage();
  }
-@@ -362,18 +500,54 @@ SoundFontFile SoundFontLibrary::resolve (bool wasBundled, const juce::String& re
+@@ -352,28 +428,80 @@ void SoundFontLibrary::timerCallback()
+ }
+ 
+ //==============================================================================
++SoundFontFile SoundFontLibrary::fromIdentity (const juce::String& identity,
++                                              const juce::String& relativePath) const
++{
++    // Identities differ only in their query (the provider hint) when they mean one entry.
++    const auto key = identity.upToFirstOccurrenceOf ("?", false, false);
++
++    {
++        const juce::ScopedLock sl (lock);
++
++        for (const auto& entry : result)
++            if (entry.identity.upToFirstOccurrenceOf ("?", false, false) == key)
++                return entry;
++    }
++
++    // Not scanned yet: enough to load it; the presets come with the next scan.
++    SoundFontFile resolved;
++    resolved.identity = identity;
++    resolved.relativePath = relativePath;
++    resolved.name = relativePath.fromLastOccurrenceOf ("/", false, false);
++    return resolved;
++}
++
+ SoundFontFile SoundFontLibrary::resolve (bool wasBundled, const juce::String& relativePath,
+                                          const juce::String& absoluteHint) const
+ {
+     if (wasBundled && usf2::bundled::isAvailable())
+         return bundled();
+ 
++   #if JUCE_ANDROID
++    // What this version saves: the soundpack identity.
++    if (absoluteHint.startsWith ("commons-soundpack://"))
++        return fromIdentity (absoluteHint, relativePath);
++
++    // Older versions saved a document URL in a folder now linked as a soundpack folder:
++    // the same file is the entry at the saved relative path in that folder's pack.
++    if (absoluteHint.startsWithIgnoreCase ("content://") && relativePath.isNotEmpty())
++        for (const auto& folder : soundpacks::folders())
++            if (absoluteHint.startsWith (folder.treeUrl + "/document/"))
++                if (const auto identity = soundpacks::identityOf (folder.id, relativePath); identity.isNotEmpty())
++                    return fromIdentity (identity, folder.name + "/" + relativePath);
++   #endif
++
+     if (relativePath.isNotEmpty())
      {
          for (const auto& root : directories())
          {
 -            const auto candidate = root.getChildFile (relativePath);
-+           #if JUCE_ANDROID
 +            if (root.isDocumentTree())
-+            {
-+                const auto document = findDocument (root, relativePath);
-+
-+                if (document.hasValue() && document.getInfo().isFile())
-+                {
-+                    SoundFontFile resolved;
-+                    resolved.root = root;
-+                    resolved.documentUrl = document.getUrl().toString (true);
-+                    resolved.name = document.getInfo().getName();
-+                    resolved.relativePath = relativePath;
-+
-+                    if (auto stream = document.createInputStream())
-+                        resolved.presets = readPresetHeaders (*stream);
-+
-+                    return resolved;
-+                }
-+
 +                continue;
-+            }
-+           #endif
 +
 +            const auto candidate = root.file.getChildFile (relativePath);
  
@@ -663,7 +801,7 @@ index 23c2f41..f1a6779 100644
  
      return {};
  }
-@@ -381,8 +555,8 @@ SoundFontFile SoundFontLibrary::resolve (bool wasBundled, const juce::String& re
+@@ -381,8 +509,8 @@ SoundFontFile SoundFontLibrary::resolve (bool wasBundled, const juce::String& re
  juce::String SoundFontLibrary::makeRelativePath (const juce::File& file) const
  {
      for (const auto& root : directories())
@@ -675,7 +813,7 @@ index 23c2f41..f1a6779 100644
      return file.getFileName();
  }
 diff --git a/src/SoundFontLibrary.h b/src/SoundFontLibrary.h
-index cb71323..9eaf287 100644
+index cb71323..6d910bb 100644
 --- a/src/SoundFontLibrary.h
 +++ b/src/SoundFontLibrary.h
 @@ -4,6 +4,7 @@
@@ -692,8 +830,8 @@ index cb71323..9eaf287 100644
      juce::File file;
 -    juce::File root;            // the configured directory it was found under
 +    SoundFontDirectory root;    // the configured directory it was found under
-+    juce::String documentUrl;   // Android SAF document URL; empty for normal files
-+    juce::String name;          // provider display name for an Android document
++    juce::String identity;      // Android: the soundpack identity; empty for normal files
++    juce::String name;          // the file name of a soundpack entry
      juce::String relativePath;  // file relative to root - this is what the state stores
      bool bundled = false;       // the embedded default, which has no path at all
      std::vector<PresetInfo> presets; // read from the file header, without loading it
@@ -708,20 +846,24 @@ index cb71323..9eaf287 100644
      {
 -        return bundled == other.bundled && file == other.file;
 +        return bundled == other.bundled && file == other.file
-+            && documentUrl == other.documentUrl;
++            && identity == other.identity;
      }
  };
  
-@@ -72,7 +79,7 @@ public:
+@@ -71,8 +78,10 @@ public:
+     ~SoundFontLibrary() override;
  
      /** Starts (or restarts) a scan of these directories and watches them from now on.
-         Returns immediately. */
+-        Returns immediately. */
 -    void rescan (const juce::Array<juce::File>& directories);
-+    void rescan (const juce::Array<SoundFontDirectory>& directories);
++        Returns immediately. On Android, [rescanLinkedFolders] also walks the linked folders
++        again, for files added since (the Refresh button). */
++    void rescan (const juce::Array<SoundFontDirectory>& directories,
++                 bool rescanLinkedFolders = false);
  
      /** Rescans the directories passed to the last rescan() call - the Refresh button. */
      void rescan();
-@@ -84,7 +91,7 @@ public:
+@@ -84,7 +93,7 @@ public:
      static SoundFontFile bundled();
  
      /** The directories the last scan covered. */
@@ -730,7 +872,17 @@ index cb71323..9eaf287 100644
  
      bool isScanning() const { return isThreadRunning(); }
  
-@@ -105,7 +112,7 @@ private:
+@@ -97,6 +106,9 @@ public:
+     SoundFontFile resolve (bool wasBundled, const juce::String& relativePath,
+                            const juce::String& absoluteHint) const;
+ 
++    /** A soundpack entry (Android) by its identity, from the last scan if it is there. */
++    SoundFontFile fromIdentity (const juce::String& identity, const juce::String& relativePath) const;
++
+     /** Describes a file the way the plugin state does: relative to its root. */
+     juce::String makeRelativePath (const juce::File& file) const;
+ 
+@@ -105,12 +117,13 @@ private:
      void timerCallback() override;
  
      mutable juce::CriticalSection lock;
@@ -739,8 +891,27 @@ index cb71323..9eaf287 100644
      juce::Array<juce::File> scannedSubdirectories;
      std::vector<SoundFontFile> result;
  
+     DirectoryWatcher watcher;
+     std::atomic<bool> watcherFired { false };
++    std::atomic<bool> linkedFoldersNeedRescan { false };
+ 
+     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SoundFontLibrary)
+ };
+diff --git a/src/ui/DirectoryBar.cpp b/src/ui/DirectoryBar.cpp
+index 8c2251d..b250604 100644
+--- a/src/ui/DirectoryBar.cpp
++++ b/src/ui/DirectoryBar.cpp
+@@ -21,7 +21,7 @@ DirectoryBar::DirectoryBar (USF2PluginProcessor& p) : processor (p)
+ 
+     refreshButton.onClick = [this]
+     {
+-        processor.library().rescan (processor.settings().activeDirectories());
++        processor.library().rescan (processor.settings().activeDirectories(), true);
+         refresh();
+     };
+ 
 diff --git a/src/ui/DirectorySettingsPanel.cpp b/src/ui/DirectorySettingsPanel.cpp
-index 655d40a..88e3b36 100644
+index 655d40a..375ef4f 100644
 --- a/src/ui/DirectorySettingsPanel.cpp
 +++ b/src/ui/DirectorySettingsPanel.cpp
 @@ -16,14 +16,15 @@ public:
@@ -762,7 +933,7 @@ index 655d40a..88e3b36 100644
                      6, 0, width - 12, height, juce::Justification::centredLeft, true);
      }
  
-@@ -221,6 +222,19 @@ void DirectorySettingsPanel::addDirectory()
+@@ -221,6 +222,20 @@ void DirectorySettingsPanel::addDirectory()
                                | juce::FileBrowserComponent::canSelectDirectories,
                            [this] (const juce::FileChooser& fc)
      {
@@ -775,14 +946,15 @@ index 655d40a..88e3b36 100644
 +        const auto added = settings.addCustomDirectory (url);
 +        refresh();
 +
-+        if (! added)
-+            messageLabel.setText ("That folder is unavailable or already in the list.",
-+                                  juce::dontSendNotification);
++        // Linking scans the folder; it shows up in the list when that is done.
++        messageLabel.setText (added ? "Adding the folder..."
++                                    : "That folder is unavailable or already in the list.",
++                              juce::dontSendNotification);
 +       #else
          const auto directory = fc.getResult();
  
          if (directory == juce::File() || ! directory.isDirectory())
-@@ -235,13 +249,14 @@ void DirectorySettingsPanel::addDirectory()
+@@ -235,13 +250,14 @@ void DirectorySettingsPanel::addDirectory()
          if (! added)
              messageLabel.setText (directory.getFullPathName() + " is already in the list.",
                                    juce::dontSendNotification);
@@ -798,7 +970,7 @@ index 655d40a..88e3b36 100644
  
      for (int i = 0; i < selected.size(); ++i)
      {
-@@ -252,7 +267,11 @@ void DirectorySettingsPanel::removeSelectedDirectories()
+@@ -252,7 +268,11 @@ void DirectorySettingsPanel::removeSelectedDirectories()
      }
  
      for (const auto& directory : toRemove)
@@ -823,3 +995,272 @@ index 4a65f6b..9d06a74 100644
      juce::Array<AppSettings::DefaultDirectory> defaultDirectories;
  
      std::unique_ptr<CustomListModel> customModel;
+diff --git a/src/android/Soundpacks.h b/src/android/Soundpacks.h
+new file mode 100644
+index 0000000..362e6cb
+--- /dev/null
++++ b/src/android/Soundpacks.h
+@@ -0,0 +1,61 @@
++#pragma once
++
++#include "../SoundFontLibrary.h"
++
++#include <functional>
++#include <vector>
++
++namespace usf2 {
++
++/** Android only: SF2 content through soundpack-provider-for-android's C API. The plugin's own
++    linked folders (LocalSf2FolderProvider), installed SF2 pack apps and the folders shared in
++    the Soundpack Manager all come through here. Every function blocks on IPC: never call them
++    from the audio thread. */
++namespace soundpacks {
++
++struct Entry
++{
++    juce::String identity;     // commons-soundpack://sf2/... - what the plugin state stores
++    juce::String packLabel;
++    juce::String path;         // within the pack
++    juce::String label;
++    std::vector<PresetInfo> presets; // from the pack's index; the file is not opened
++};
++
++struct Folder
++{
++    juce::String id;
++    juce::String name;
++    juce::String treeUrl;
++    bool available = false;
++    int fileCount = 0;
++    juce::String error;
++};
++
++/** Every SF2 entry the app can read. */
++std::vector<Entry> listEntries();
++
++/** The folders this app linked for SF2. */
++std::vector<Folder> folders();
++
++/** Links and scans a folder the app's picker returned. Returns the folder id, or an empty
++    string with [error] set. Scanning reads every SF2's preset headers once: slow for large
++    folders, so call it off the message thread. */
++juce::String addFolder (const juce::String& treeUrl, juce::String& error);
++
++bool removeFolder (const juce::String& folderId);
++
++/** Rescans every linked folder, so files added since show up. */
++void rescanFolders();
++
++/** The identity of [path] in the linked folder [folderId]. */
++juce::String identityOf (const juce::String& folderId, const juce::String& path);
++
++/** Maps an entry's file and passes its bytes to [use], then releases the mapping. Returns
++    false with [error] set when the entry cannot be opened. */
++bool withMappedEntry (const juce::String& identity,
++                      const std::function<void (const void* data, size_t size)>& use,
++                      juce::String& error);
++
++} // namespace soundpacks
++} // namespace usf2
+diff --git a/src/android/Soundpacks.cpp b/src/android/Soundpacks.cpp
+new file mode 100644
+index 0000000..53b4020
+--- /dev/null
++++ b/src/android/Soundpacks.cpp
+@@ -0,0 +1,196 @@
++// Before any JUCE header: juce::getEnv() and juce::getAppContext() are declared only then.
++#define JUCE_CORE_INCLUDE_JNI_HELPERS 1
++
++#include "Soundpacks.h"
++
++#include "../SoundFontLibrary.h"
++
++#include <soundpack_host.h>
++
++#include <algorithm>
++#include <mutex>
++
++namespace usf2::soundpacks {
++
++namespace
++{
++    juce::String text (const char* utf8) { return juce::String::fromUTF8 (utf8); }
++
++    juce::String lastError() { return text (soundpack_last_error()); }
++
++    void log (const juce::String& message) { juce::Logger::outputDebugString ("usf2plugin soundpacks: " + message); }
++
++    bool initialised()
++    {
++        static std::once_flag once;
++        static bool ok = false;
++
++        std::call_once (once, []
++        {
++            const auto context = juce::getAppContext();
++            ok = soundpack_init (juce::getEnv(), context.get()) == 0;
++
++            if (! ok)
++                log ("soundpack_init failed: " + lastError());
++        });
++
++        return ok;
++    }
++
++    // {"presets":[{"bank":0,"program":0,"name":"..."}]}, as the SF2 indexer stores it.
++    std::vector<PresetInfo> presetsOf (const juce::String& metadata)
++    {
++        std::vector<PresetInfo> result;
++        // Held in locals: getArray() points into the parsed value.
++        const auto json = juce::JSON::parse (metadata);
++        const auto list = json.getProperty ("presets", {});
++
++        if (auto* presets = list.getArray())
++            for (const auto& preset : *presets)
++                result.push_back ({ (int) preset.getProperty ("bank", 0),
++                                    (int) preset.getProperty ("program", 0),
++                                    preset.getProperty ("name", {}).toString() });
++
++        std::sort (result.begin(), result.end(), [] (const PresetInfo& a, const PresetInfo& b)
++        {
++            return a.bank != b.bank ? a.bank < b.bank : a.program < b.program;
++        });
++
++        return result;
++    }
++}
++
++std::vector<Entry> listEntries()
++{
++    std::vector<Entry> result;
++
++    if (! initialised())
++        return result;
++
++    auto* list = soundpack_list_entries ("sf2");
++
++    if (list == nullptr)
++    {
++        log ("listing SF2 entries failed: " + lastError());
++        return result;
++    }
++
++    for (size_t i = 0; i < soundpack_entry_list_count (list); ++i)
++        result.push_back ({ text (soundpack_entry_identity (list, i)),
++                            text (soundpack_entry_pack_label (list, i)),
++                            text (soundpack_entry_path (list, i)),
++                            text (soundpack_entry_label (list, i)),
++                            presetsOf (text (soundpack_entry_metadata (list, i))) });
++
++    soundpack_entry_list_free (list);
++    return result;
++}
++
++std::vector<Folder> folders()
++{
++    std::vector<Folder> result;
++
++    if (! initialised())
++        return result;
++
++    auto* list = soundpack_host_list_folders();
++
++    if (list == nullptr)
++    {
++        log ("listing folders failed: " + lastError());
++        return result;
++    }
++
++    for (size_t i = 0; i < soundpack_folder_count (list); ++i)
++    {
++        juce::StringArray kinds;
++        kinds.addTokens (text (soundpack_folder_kinds (list, i)), ",", {});
++
++        if (! kinds.contains ("sf2"))
++            continue;
++
++        result.push_back ({ text (soundpack_folder_id (list, i)),
++                            text (soundpack_folder_display_name (list, i)),
++                            text (soundpack_folder_tree_uri (list, i)),
++                            soundpack_folder_available (list, i) != 0,
++                            soundpack_folder_file_count (list, i),
++                            text (soundpack_folder_error (list, i)) });
++    }
++
++    soundpack_folder_list_free (list);
++    return result;
++}
++
++juce::String addFolder (const juce::String& treeUrl, juce::String& error)
++{
++    char id[256];
++
++    if (! initialised()
++          || soundpack_host_add_folder (treeUrl.toRawUTF8(), "sf2", id, sizeof (id)) != 0)
++    {
++        error = lastError();
++        return {};
++    }
++
++    return text (id);
++}
++
++bool removeFolder (const juce::String& folderId)
++{
++    return initialised() && soundpack_host_remove_folder (folderId.toRawUTF8()) == 0;
++}
++
++void rescanFolders()
++{
++    if (initialised() && soundpack_host_rescan (nullptr) != 0)
++        log ("rescanning folders failed: " + lastError());
++}
++
++juce::String identityOf (const juce::String& folderId, const juce::String& path)
++{
++    char identity[4096];
++
++    if (! initialised()
++          || soundpack_format_identity ("sf2", folderId.toRawUTF8(), path.toRawUTF8(),
++                                        identity, sizeof (identity)) != 0)
++        return {};
++
++    return text (identity);
++}
++
++bool withMappedEntry (const juce::String& identity,
++                      const std::function<void (const void* data, size_t size)>& use,
++                      juce::String& error)
++{
++    if (! initialised())
++    {
++        error = lastError();
++        return false;
++    }
++
++    auto* session = soundpack_open (identity.toRawUTF8());
++
++    if (session == nullptr)
++    {
++        error = lastError();
++        return false;
++    }
++
++    soundpack_mapping mapping;
++    const auto mapped = soundpack_session_map (session, soundpack_session_entry (session), &mapping) == 0;
++
++    if (! mapped)
++        error = lastError();
++
++    // The mapping outlives the session.
++    soundpack_session_close (session);
++
++    if (! mapped)
++        return false;
++
++    use (mapping.data, mapping.size);
++    soundpack_mapping_release (&mapping);
++    return true;
++}
++
++} // namespace usf2::soundpacks

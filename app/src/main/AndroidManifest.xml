@@ -53,6 +53,12 @@
             android:name="org.androidaudioplugin.AudioPluginViewService"
             android:exported="true" />
 
+        <!-- The SF2 folders linked in the plugin UI ("Directories"). Private: not exported. -->
+        <provider
+            android:name="org.androidaudioplugin.soundpack.host.LocalSf2FolderProvider"
+            android:authorities="${applicationId}.soundpack.local.sf2"
+            android:exported="false" />
+
         <service
             android:name="org.androidaudioplugin.midideviceservice.StandaloneAudioPluginMidiDeviceService"
             android:exported="true"
